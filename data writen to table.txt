@@ -1,0 +1,69 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, to_date
+from pyspark.sql.types import DecimalType
+
+
+storage_account_name = "datalake storege Accountname"
+storage_account_key = "account secret key"
+container_name = "input"
+
+
+json_file_path = f"abfss://{container_name}@{storage_account_name}.dfs.core.windows.net/Invoice_sample.json"
+
+
+spark = SparkSession.builder \
+    .appName("Load JSON to Delta Table") \
+    .getOrCreate()
+
+
+spark.conf.set(f"fs.azure.account.key.{storage_account_name}.dfs.core.windows.net", storage_account_key)
+
+
+df = spark.read.option("multiline", "true").json(json_file_path)
+
+
+df.printSchema()
+
+
+df_selected = df.select(
+    col("invoice_id").cast("string"),
+    col("invoice_number").cast("string"),
+    to_date(col("date"), "yyyy-MM-dd").alias("idate"),
+    col("customer_id").cast("string"),
+    col("customer_name").cast("string"),
+    col("branch_name").cast("string"),
+    col("total").cast(DecimalType(12, 4)),
+    col("salesperson_name").cast("string")
+)
+
+
+delta_table_path = f"abfss://storagetable@{storage_account_name}.dfs.core.windows.net/delta/InvoiceHeader"
+
+
+try:
+    df_selected.write.format("delta").mode("overwrite").save(delta_table_path)
+    print(f"Data written to Delta table at {delta_table_path} successfully.")
+except Exception as e:
+    print(f"Error writing data to Delta table: {e}")
+
+
+try:
+    spark.sql(f"""
+        CREATE  TABLE IF NOT EXISTS InvoiceHeader_new (
+            invoice_id STRING,
+            invoice_number STRING,
+            idate DATE,
+            customer_id STRING,
+            customer_name STRING,
+            branch_name STRING,
+            total DECIMAL(12, 4),
+            salesperson_name STRING
+        )
+        USING DELTA
+        LOCATION '{delta_table_path}'
+    """)
+    print("Delta table created successfully.")
+except Exception as e:
+    print(f"Error creating Delta table: {e}")
+
+
